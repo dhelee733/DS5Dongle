@@ -90,6 +90,16 @@ target_compile_definitions(ds5-bridge PRIVATE
         ENABLE_VERBOSE=${ENABLE_VERBOSE_VALUE}
 )
 
+option(ENABLE_WAKE_HID "Wake the Windows host on PS-button press" OFF)
+if(ENABLE_WAKE_HID)
+    target_compile_definitions(ds5-bridge PRIVATE
+            ENABLE_WAKE_HID
+    )
+    target_sources(ds5-bridge PRIVATE
+            src/wake.cpp
+    )
+endif()
+
 pico_set_program_name(ds5-bridge "ds5-bridge")
 pico_set_program_version(ds5-bridge "0.5.3")
 

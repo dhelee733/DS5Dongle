@@ -96,7 +96,11 @@
 
 //------------- CLASS -------------//
 #define CFG_TUD_AUDIO             1
+#ifdef ENABLE_WAKE_HID
+#define CFG_TUD_HID               2
+#else
 #define CFG_TUD_HID               1
+#endif
 #define CFG_TUD_CDC               ENABLE_SERIAL
 #define CFG_TUD_MSC               0
 #define CFG_TUD_MIDI              0

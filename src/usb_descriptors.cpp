@@ -47,6 +47,9 @@ enum {
     ITF_NUM_CDC,
     ITF_NUM_CDC_DATA,
 #endif
+#ifdef ENABLE_WAKE_HID
+    ITF_NUM_HID_KBD,
+#endif
     ITF_NUM_TOTAL,
 
     CONFIG_DESC_LEN_AUDIO_IAD =
@@ -56,7 +59,15 @@ enum {
         0,
 #endif
     CONFIG_DESC_LEN_BASE = 0x00E3 + CONFIG_DESC_LEN_AUDIO_IAD,
-    CONFIG_DESC_LEN_TOTAL = CONFIG_DESC_LEN_BASE
+    // Keyboard interface adds 25 bytes:
+    //   9 (interface) + 9 (HID class) + 7 (EP IN) = 25
+    CONFIG_DESC_LEN_WAKE_KBD =
+#ifdef ENABLE_WAKE_HID
+        25,
+#else
+        0,
+#endif
+    CONFIG_DESC_LEN_TOTAL = CONFIG_DESC_LEN_BASE + CONFIG_DESC_LEN_WAKE_KBD
 #if ENABLE_SERIAL
         + TUD_CDC_DESC_LEN
 #endif
@@ -125,7 +136,11 @@ uint8_t descriptor_configuration[] = {
     ITF_NUM_TOTAL, // bNumInterfaces
     0x01, // bConfigurationValue: 1
     0x00, // iConfiguration: 0
+#ifdef ENABLE_WAKE_HID
+    0xE0, // bmAttributes: SELF-POWERED + REMOTE-WAKEUP
+#else
     0xC0, // bmAttributes: SELF-POWERED, NO REMOTE-WAKEUP
+#endif
     0xFA, // bMaxPower: 500mA (250 * 2mA)
 
 #if ENABLE_SERIAL
@@ -384,6 +399,37 @@ uint8_t descriptor_configuration[] = {
 #if ENABLE_SERIAL
     // --- CDC ACM (USB Serial) ---
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STRID_CDC, 0x85, 0x08, 0x06, 0x86, 0x40),
+#endif
+#ifdef ENABLE_WAKE_HID
+    // --- INTERFACE DESCRIPTOR (HID Boot Keyboard, wake key only) ---
+    // EP IN 0x87 (chosen to avoid collision with CDC notification EP 0x85
+    // when ENABLE_SERIAL is also defined).
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    ITF_NUM_HID_KBD, // bInterfaceNumber
+    0x00, // bAlternateSetting: 0
+    0x01, // bNumEndpoints: 1 (IN only)
+    0x03, // bInterfaceClass: HID
+    0x01, // bInterfaceSubClass: Boot
+    0x01, // bInterfaceProtocol: Keyboard
+    0x00, // iInterface
+
+    // HID Descriptor (keyboard)
+    0x09, // bLength
+    0x21, // bDescriptorType (HID)
+    0x11, 0x01, // bcdHID: 1.11
+    0x00, // bCountryCode
+    0x01, // bNumDescriptors
+    0x22, // bDescriptorType: Report
+    0x2D, 0x00, // wDescriptorLength: 45 (sizeof desc_hid_report_kbd)
+
+    // Endpoint Descriptor (HID IN: EP7)
+    0x07, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    0x87, // bEndpointAddress: IN EP7
+    0x03, // bmAttributes: Interrupt
+    0x08, 0x00, // wMaxPacketSize: 8 (boot keyboard report)
+    0x0A, // bInterval: 10ms
 #endif
 };
 
@@ -785,10 +831,45 @@ uint8_t const desc_hid_report_dse[] = {
     // 421 bytes
 };
 
+#ifdef ENABLE_WAKE_HID
+// 41-byte boot-keyboard report descriptor (modifier byte + reserved + 6 keycodes,
+// no Report ID -- boot protocol forbids one and avoids collision with the gamepad's Report ID 1).
+uint8_t const desc_hid_report_kbd[] = {
+    0x05, 0x01,       // Usage Page (Generic Desktop)
+    0x09, 0x06,       // Usage (Keyboard)
+    0xA1, 0x01,       // Collection (Application)
+    0x05, 0x07,       //   Usage Page (Keyboard/Keypad)
+    0x19, 0xE0,       //   Usage Minimum (Left Control)
+    0x29, 0xE7,       //   Usage Maximum (Right GUI)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x25, 0x01,       //   Logical Maximum (1)
+    0x75, 0x01,       //   Report Size (1)
+    0x95, 0x08,       //   Report Count (8)
+    0x81, 0x02,       //   Input (Data,Var,Abs) -- modifier byte
+    0x95, 0x01,       //   Report Count (1)
+    0x75, 0x08,       //   Report Size (8)
+    0x81, 0x01,       //   Input (Const) -- reserved byte
+    0x95, 0x06,       //   Report Count (6)
+    0x75, 0x08,       //   Report Size (8)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x25, 0x65,       //   Logical Maximum (101)
+    0x05, 0x07,       //   Usage Page (Keyboard/Keypad)
+    0x19, 0x00,       //   Usage Minimum (0)
+    0x29, 0x65,       //   Usage Maximum (101)
+    0x81, 0x00,       //   Input (Data,Array) -- 6 keycodes
+    0xC0              // End Collection
+};
+_Static_assert(sizeof(desc_hid_report_kbd) == 45, "keyboard report descriptor length must match wDescriptorLength in config descriptor");
+#endif
+
 // Invoked when received GET HID REPORT DESCRIPTOR
 // Application return pointer to descriptor
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
+#ifdef ENABLE_WAKE_HID
+    // HID instance 1 is the wake-only boot keyboard added by ENABLE_WAKE_HID.
+    if (itf == 1) return desc_hid_report_kbd;
+#endif
     (void) itf;
     if (ds_mode()) {
         return desc_hid_report_ds;

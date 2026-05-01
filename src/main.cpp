@@ -8,6 +8,7 @@
 #include "utils.h"
 #include "resample.h"
 #include "audio.h"
+#include "wake.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
@@ -99,6 +100,8 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
         memcpy(interrupt_in_data, data + 3, 63);
         report_dirty = true;
         critical_section_exit(&report_cs);
+
+        wake_on_bt_input(data + 3, len - 3);
     }
 }
 
@@ -107,6 +110,15 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
 // Return zero will cause the stack to STALL request
 uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer,
                                uint16_t reqlen) {
+#ifdef ENABLE_WAKE_HID
+    if (itf == 1) {
+        if (reqlen >= 8) {
+            memset(buffer, 0, 8);
+            return 8;
+        }
+        return 0;
+    }
+#endif
     (void) itf;
     (void) report_id;
     (void) report_type;
@@ -142,6 +154,12 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
 // received data on OUT endpoint ( Report ID = 0, Type = 0 )
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer,
                            uint16_t bufsize) {
+#ifdef ENABLE_WAKE_HID
+    if (itf == 1) {
+        // Drop keyboard SET_REPORT (host LED state).
+        return;
+    }
+#endif
     (void) itf;
     (void) report_id;
     (void) report_type;
@@ -229,6 +247,7 @@ int main() {
 
     // Initialize the critical section for the report buffer
     critical_section_init(&report_cs);
+    wake_init();
 
     config_load();
 
@@ -247,6 +266,7 @@ int main() {
 #endif
         cyw43_arch_poll();
         tud_task();
+        wake_task();
         audio_loop();
         interrupt_loop();
     }
