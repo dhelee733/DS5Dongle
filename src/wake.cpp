@@ -34,7 +34,11 @@ static volatile bool host_suspended = false;
 static volatile bool host_resumed_event = false;
 static wake_state_t state = WAKE_IDLE;
 static uint64_t state_entered_us = 0;
-static uint8_t prev_ps_bit = 1;
+// Last-seen DualSense button bytes. Idle defaults: byte 7 = 0x08 (D-pad
+// released), bytes 8 / 9 = 0 (no shoulders, no PS / touchpad / mute).
+static uint8_t prev_b7 = 0x08;
+static uint8_t prev_b8 = 0x00;
+static uint8_t prev_b9 = 0x00;
 
 static void enter_state(wake_state_t s) {
     state = s;
@@ -51,7 +55,7 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
     if (state == WAKE_IDLE || state == WAKE_DONE) {
         state = WAKE_PENDING_PRESS;
         state_entered_us = time_us_64();
-        prev_ps_bit = 1;
+        prev_b7 = 0x08; prev_b8 = 0x00; prev_b9 = 0x00;
     }
 }
 
@@ -66,31 +70,46 @@ void wake_on_bt_input(const uint8_t *hid_input, uint16_t len) {
     //   byte 7 low nibble: D-pad direction (0x08 idle); high nibble: face buttons
     //   byte 8: L1, R1, L2 click, R2 click, share, options, L3, R3
     //   byte 9: PS (bit 0), touchpad-click (bit 1), mute (bit 2)
-    // The PS bit is at byte 9, not byte 8 (which is L1). Verified by capturing
-    // per-button report deltas with a diagnostic firmware.
-    const uint8_t ps_now = hid_input[9] & 0x01;
+    //
+    // We trigger on ANY change in those three button bytes, not strictly on
+    // the PS bit. Reasons:
+    //   1. The DualSense's BT radio enters a low-power sniff mode after a
+    //      period of inactivity. The PS button alone often does not wake
+    //      the radio out of sniff -- shoulder buttons reliably do. So the
+    //      first BT report after S3 is most likely whichever button the
+    //      user happened to press to wake the radio. PS itself counts as
+    //      "any button" too, so the single-press UX still works.
+    //   2. We additionally call tud_remote_wakeup() speculatively even from
+    //      WAKE_IDLE / WAKE_DONE state. TinyUSB returns true only when the
+    //      host actually USB-suspended the bus; otherwise it's a no-op. This
+    //      protects against the case where tud_suspend_cb didn't fire (e.g.
+    //      a hub between the host and the dongle masking the suspend signal
+    //      from downstream). On success the FSM transitions to REQUESTED and
+    //      proceeds with the keystroke as normal.
+    const uint8_t b7 = hid_input[7];
+    const uint8_t b8 = hid_input[8];
+    const uint8_t b9 = hid_input[9];
 
     critical_section_enter_blocking(&wake_cs);
-    const bool edge = (prev_ps_bit == 0 && ps_now == 1);
-    prev_ps_bit = ps_now;
-    const bool act = edge && state == WAKE_PENDING_PRESS;
-    if (act) {
-        state = WAKE_REQUESTED;
-        state_entered_us = time_us_64();
-    }
+    const bool changed = (b7 != prev_b7) || (b8 != prev_b8) || (b9 != prev_b9);
+    const bool armable = (state == WAKE_IDLE || state == WAKE_DONE || state == WAKE_PENDING_PRESS);
+    prev_b7 = b7; prev_b8 = b8; prev_b9 = b9;
     critical_section_exit(&wake_cs);
 
-    if (act) {
-        // Safe no-op if the host did not enable remote wakeup. We still proceed
-        // through the FSM and try to send the key once the host resumes.
-        tud_remote_wakeup();
+    if (changed && armable) {
+        if (tud_remote_wakeup()) {
+            critical_section_enter_blocking(&wake_cs);
+            state = WAKE_REQUESTED;
+            state_entered_us = time_us_64();
+            critical_section_exit(&wake_cs);
+        }
     }
 }
 
 void wake_on_bt_disconnect(void) {
     critical_section_enter_blocking(&wake_cs);
     state = WAKE_IDLE;
-    prev_ps_bit = 1;
+    prev_b7 = 0x08; prev_b8 = 0x00; prev_b9 = 0x00;
     critical_section_exit(&wake_cs);
 }
 
