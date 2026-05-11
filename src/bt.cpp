@@ -422,7 +422,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                         0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xa,
                         0x7, 0x0, 0x0, 0x2, 0x1,
                         0x00,
-                        0xff, 0xd7, 0x00 // RGB LED: R, G, B (Nijika Color!)✨
+                        0x00, 0x00, 0xff // RGB LED: R, G, B (Nijika Color!)✨
                     };
                     memcpy(report32 + 2, packet_0x10, sizeof(packet_0x10));
                     bt_write(report32, sizeof(report32));
